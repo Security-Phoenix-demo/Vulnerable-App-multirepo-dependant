@@ -1,0 +1,15 @@
+-- Dependent Service Schema
+CREATE TABLE IF NOT EXISTS USERS (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255),
+    password VARCHAR(255),
+    email VARCHAR(255),
+    role VARCHAR(50) DEFAULT 'user'
+);
+
+CREATE TABLE IF NOT EXISTS AUDIT_LOG (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    action VARCHAR(255),
+    user_input TEXT,
+    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

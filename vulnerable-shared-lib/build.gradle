@@ -1,0 +1,36 @@
+plugins {
+    id 'java-library'
+    id 'maven-publish'
+}
+
+dependencies {
+    // Pattern 5: Transitive dependency poisoning — known vulnerable versions
+    api 'org.apache.logging.log4j:log4j-core:2.14.1'          // CVE-2021-44228 Log4Shell
+    api 'org.apache.logging.log4j:log4j-api:2.14.1'
+    api 'org.apache.commons:commons-text:1.8'                  // CVE-2022-42889 Text4Shell
+    api 'com.fasterxml.jackson.core:jackson-databind:2.9.8'    // CVE-2019-12384 deserialization
+    api 'org.yaml:snakeyaml:1.26'                              // CVE-2022-1471 arbitrary constructor
+
+    // Functional dependencies
+    api 'com.nimbusds:nimbus-jose-jwt:8.3'
+    api 'org.json:json:20190722'
+
+    // Spring context for config annotations (provided scope)
+    compileOnly 'org.springframework:spring-context:5.3.6'
+    compileOnly 'org.springframework:spring-web:5.3.6'
+    compileOnly 'javax.validation:validation-api:2.0.1.Final'
+}
+
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+            groupId = 'org.sasanlabs'
+            artifactId = 'vulnerable-shared-lib'
+            version = '1.0.0'
+        }
+    }
+    repositories {
+        mavenLocal()
+    }
+}

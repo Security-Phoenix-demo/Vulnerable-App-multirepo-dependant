@@ -1,0 +1,4 @@
+rootProject.name = 'VulnerableApp-dependent'
+
+include ':vulnerable-shared-lib'
+include ':vulnerable-service'
