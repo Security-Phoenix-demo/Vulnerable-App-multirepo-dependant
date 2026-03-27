@@ -29,22 +29,103 @@ jobs:
           echo "base=${{ github.base_ref }}"
           echo "head=${{ github.head_ref }}"
 
-      - name: Phoenix PR scan resolve (best-effort)
+      - name: Phoenix PR scan (resolve -> execute -> poll)
         run: |
           set -euo pipefail
+
           if [[ -z "${PHOENIX_API_URL:-}" || -z "${PHOENIX_API_TOKEN:-}" ]]; then
             echo "::warning::PHOENIX_API_URL and/or PHOENIX_API_TOKEN are not configured. Invocation skipped."
             exit 0
           fi
-          http_code="$(
+
+          echo "Resolving bundle stack..."
+          resolve_code="$(
             curl -sS -o resolve-response.json -w "%{http_code}" \
               -H "Authorization: Bearer ${PHOENIX_API_TOKEN}" \
               -H "Content-Type: application/json" \
+              -H "ngrok-skip-browser-warning: true" \
               -X POST "${PHOENIX_API_URL}/api/v1/pr-scan/resolve" \
-              -d "{\"repoName\":\"${{ github.event.repository.name }}\",\"workspaceId\":null,\"branch\":\"${{ github.head_ref }}\"}" \
-              || true
+              -d "{\"repoName\":\"${{ github.event.repository.name }}\",\"workspaceId\":null}" \
           )"
-          echo "phoenix_resolve_http_code=${http_code}"
-          if [[ "${http_code}" -lt 200 || "${http_code}" -ge 300 ]]; then
-            echo "::warning::Phoenix resolve call returned non-2xx (${http_code})."
+          echo "phoenix_resolve_http_code=${resolve_code}"
+          if [[ "${resolve_code}" -lt 200 || "${resolve_code}" -ge 300 ]]; then
+            echo "::error::Phoenix resolve failed with HTTP ${resolve_code}"
+            exit 2
           fi
+
+          bundles_json="$(jq -c '.bundles // []' resolve-response.json)"
+          bundle_count="$(jq -r '.bundles | length' resolve-response.json)"
+          if [[ "${bundle_count}" == "0" ]]; then
+            echo "::warning::Resolve returned zero bundles. Skipping execute."
+            exit 0
+          fi
+          echo "Resolved bundles: ${bundle_count}"
+
+          echo "Submitting PR scan execute..."
+          execute_payload="$(jq -n \
+            --arg repo "${{ github.event.repository.name }}" \
+            --arg base "${{ github.base_ref }}" \
+            --arg head "${{ github.head_ref }}" \
+            --argjson prNumber "${{ github.event.pull_request.number }}" \
+            --argjson bundles "${bundles_json}" \
+            '{repoName:$repo,workspaceId:null,baseBranch:$base,headBranch:$head,prNumber:$prNumber,timeoutSeconds:300,resolvedBundles:$bundles}')"
+
+          execute_code="$(
+            curl -sS -o execute-response.json -w "%{http_code}" \
+              -H "Authorization: Bearer ${PHOENIX_API_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -H "ngrok-skip-browser-warning: true" \
+              -X POST "${PHOENIX_API_URL}/api/v1/pr-scan/execute" \
+              -d "${execute_payload}"
+          )"
+          echo "phoenix_execute_http_code=${execute_code}"
+          if [[ "${execute_code}" -lt 200 || "${execute_code}" -ge 300 ]]; then
+            echo "::error::Phoenix execute failed with HTTP ${execute_code}"
+            exit 2
+          fi
+
+          job_id="$(jq -r '.jobId // empty' execute-response.json)"
+          if [[ -z "${job_id}" ]]; then
+            echo "::error::Execute response missing jobId"
+            exit 2
+          fi
+          echo "job_id=${job_id}"
+
+          echo "Polling PR scan job..."
+          attempts=60
+          sleep_secs=5
+          final_status=""
+          final_verdict=""
+          for ((i=1; i<=attempts; i++)); do
+            status_code="$(
+              curl -sS -o status-response.json -w "%{http_code}" \
+                -H "Authorization: Bearer ${PHOENIX_API_TOKEN}" \
+                -H "ngrok-skip-browser-warning: true" \
+                "${PHOENIX_API_URL}/api/v1/pr-scan/${job_id}"
+            )"
+            if [[ "${status_code}" -lt 200 || "${status_code}" -ge 300 ]]; then
+              echo "::error::Status poll failed (attempt ${i}) HTTP ${status_code}"
+              exit 2
+            fi
+
+            final_status="$(jq -r '.status // ""' status-response.json)"
+            final_verdict="$(jq -r '.finalVerdict // ""' status-response.json)"
+            echo "poll=${i} status=${final_status} verdict=${final_verdict}"
+
+            if [[ "${final_status}" == "COMPLETED" || "${final_status}" == "ERROR" || "${final_status}" == "TIMEOUT" ]]; then
+              break
+            fi
+            sleep "${sleep_secs}"
+          done
+
+          if [[ "${final_status}" != "COMPLETED" ]]; then
+            echo "::error::PR scan did not complete successfully (status=${final_status})"
+            exit 2
+          fi
+
+          if [[ "${final_verdict}" == "BLOCK" ]]; then
+            echo "::error::Phoenix PR scan verdict is BLOCK"
+            exit 1
+          fi
+
+          echo "Phoenix PR scan passed with verdict=${final_verdict:-UNKNOWN}"
