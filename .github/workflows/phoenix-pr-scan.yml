@@ -1,0 +1,61 @@
+name: Phoenix PR Scan
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pull-requests: write
+  security-events: write
+
+jobs:
+  pr-scan:
+    name: pr-scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: PR context
+        run: |
+          echo "repo=${{ github.repository }}"
+          echo "pr_number=${{ github.event.pull_request.number }}"
+          echo "base=${{ github.base_ref }}"
+          echo "head=${{ github.head_ref }}"
+
+      - name: Phoenix PR scan resolve
+        if: ${{ secrets.PHOENIX_API_URL != '' && secrets.PHOENIX_API_TOKEN != '' }}
+        env:
+          PHOENIX_API_URL: ${{ secrets.PHOENIX_API_URL }}
+          PHOENIX_API_TOKEN: ${{ secrets.PHOENIX_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail \
+            -H "Authorization: Bearer ${PHOENIX_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST "${PHOENIX_API_URL}/api/v1/pr-scan/resolve" \
+            -d "{\"repoName\":\"${{ github.event.repository.name }}\",\"workspaceId\":null,\"branch\":\"${{ github.head_ref }}\"}" \
+            > resolve-response.json
+          echo "resolve-response.json generated"
+
+      - name: Phoenix PR scan execute
+        if: ${{ secrets.PHOENIX_API_URL != '' && secrets.PHOENIX_API_TOKEN != '' }}
+        env:
+          PHOENIX_API_URL: ${{ secrets.PHOENIX_API_URL }}
+          PHOENIX_API_TOKEN: ${{ secrets.PHOENIX_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -sS --fail \
+            -H "Authorization: Bearer ${PHOENIX_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -X POST "${PHOENIX_API_URL}/api/v1/pr-scan/execute" \
+            -d "{\"repoName\":\"${{ github.event.repository.name }}\",\"workspaceId\":null,\"baseBranch\":\"${{ github.base_ref }}\",\"headBranch\":\"${{ github.head_ref }}\",\"prNumber\":${{ github.event.pull_request.number }},\"timeoutSeconds\":300,\"resolvedBundles\":[]}" \
+            > execute-response.json
+          echo "execute-response.json generated"
+
+      - name: Phoenix config missing notice
+        if: ${{ secrets.PHOENIX_API_URL == '' || secrets.PHOENIX_API_TOKEN == '' }}
+        run: |
+          echo "::warning::PHOENIX_API_URL and/or PHOENIX_API_TOKEN are not configured. PR scan invocation skipped."
