@@ -1,0 +1,7 @@
+INTENTIONALLY INSECURE EXAMPLE
+
+Component: old-library
+Version: 1.0.0
+Known issue: hypothetical remote code execution
+
+Purpose: test dependency scanners and policy gates.
